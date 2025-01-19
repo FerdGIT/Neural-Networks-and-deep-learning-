@@ -1,71 +1,149 @@
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
-from tensorflow.keras.datasets import mnist
-from sklearn.model_selection import KFold
 import matplotlib.pyplot as plt
+from sklearn.model_selection import KFold
+import tensorflow as tf
+from tensorflow.keras.utils import to_categorical
 
-# Caricamento e preparazione del dataset MNIST
-(x_train, y_train), (_, _) = mnist.load_data()
-x_train = x_train.reshape(-1, 28 * 28).astype('float32') / 255.0
-y_train = tf.keras.utils.to_categorical(y_train, 10)
 
-# Funzione per creare il modello
-def create_model(num_hidden_units):
-    model = Sequential([
-        Dense(num_hidden_units, input_shape=(28 * 28,), activation='relu'),
-        Dense(10, activation='softmax')
-    ])
-    model.compile(loss='categorical_crossentropy', optimizer='sgd', metrics=['accuracy'])
-    return model
+(x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
 
-# Funzione per l'aggiornamento RProp
-def rprop_update(weights, grads, prev_grads, prev_step, eta_pos=1.2, eta_neg=0.5, delta_max=50.0, delta_min=1e-6):
-    sign_change = np.sign(grads) != np.sign(prev_grads)
-    prev_step[sign_change] *= eta_neg
-    prev_step[~sign_change] *= eta_pos
-    prev_step = np.clip(prev_step, delta_min, delta_max)
-    weights -= prev_step * np.sign(grads)
-    return weights, grads, prev_step
+x_train = x_train.reshape(-1, 28*28) / 255.0  # Normalizzazione e reshaping (28x28 a 784)
+x_test = x_test.reshape(-1, 28*28) / 255.0
 
-# Funzione di allenamento
-def train_model_rprop(x_train, y_train, num_hidden_units, epochs, eta_pos, eta_neg):
-    model = create_model(num_hidden_units)
-    weights, biases = model.layers[0].get_weights()
+# One-hot encoding delle etichette
+y_train = to_categorical(y_train, 10)
+y_test = to_categorical(y_test, 10)
 
-    prev_grads_w = np.zeros_like(weights)
-    prev_grads_b = np.zeros_like(biases)
-    prev_step_w = np.ones_like(weights) * 0.1
-    prev_step_b = np.ones_like(biases) * 0.1
 
-    history = {'accuracy': [], 'loss': []}
+def initialize_weights(input_dim, hidden_dim, output_dim):
+    weights = {
+        "W1": np.random.randn(input_dim, hidden_dim) * 0.1,
+        "b1": np.zeros(hidden_dim),
+        "W2": np.random.randn(hidden_dim, output_dim) * 0.1,
+        "b2": np.zeros(output_dim)
+    }
+    return weights
+
+# Funzione di forward pass
+def forward_pass(X, weights):
+    z1 = np.dot(X, weights["W1"]) + weights["b1"]
+    a1 = np.tanh(z1)  # Funzione di attivazione tanh
+    z2 = np.dot(a1, weights["W2"]) + weights["b2"]
+    a2 = softmax(z2)  # Funzione softmax per la classificazione multi-classe
+    return z1, a1, z2, a2
+
+
+def softmax(z):
+    e_z = np.exp(z - np.max(z, axis=1, keepdims=True))
+    return e_z / np.sum(e_z, axis=1, keepdims=True)
+
+# Funzione per calcolare la loss (entropia incrociata)
+def compute_loss(y, a2):
+    m = y.shape[0]
+    log_likelihood = -np.log(a2[range(m), np.argmax(y, axis=1)])
+    loss = np.sum(log_likelihood) / m
+    return loss
+
+# Funzione di backward pass
+def backward_pass(X, y, z1, a1, z2, a2, weights):
+    m = X.shape[0]
+    
+    delta2 = a2 - y  # Derivata della loss rispetto all'output
+    dW2 = np.dot(a1.T, delta2) / m
+    db2 = np.sum(delta2, axis=0) / m
+
+    delta1 = np.dot(delta2, weights["W2"].T) * (1 - np.tanh(z1) ** 2)  # Derivata della funzione tanh
+    dW1 = np.dot(X.T, delta1) / m
+    db1 = np.sum(delta1, axis=0) / m
+
+    grads = {
+        "W1": dW1, "b1": db1,
+        "W2": dW2, "b2": db2
+    }
+    return grads
+
+# Funzione RProp per l'aggiornamento dei pesi
+def rprop_update(weights, grads, prev_grads, prev_steps, eta_pos, eta_neg):
+    for key in weights:
+        grad_sign = np.sign(grads[key])
+        prev_grad_sign = np.sign(prev_grads[key])
+
+        # Aggiornamento passo
+        update_step = prev_steps[key] * np.where(grad_sign == prev_grad_sign, eta_pos, eta_neg)
+        prev_steps[key] = update_step
+        weights[key] -= np.sign(grads[key]) * update_step  # Applicazione del gradiente aggiornato
+
+        prev_grads[key] = grads[key]
+    
+    return weights, prev_grads, prev_steps
+
+# Funzione per addestrare il modello con Early Stopping
+def train_model_rprop_with_early_stopping(x_train, y_train, x_val, y_val, hidden_dim, epochs, eta_pos, eta_neg, patience=10):
+    input_dim = x_train.shape[1]
+    output_dim = y_train.shape[1]
+
+    weights = initialize_weights(input_dim, hidden_dim, output_dim)
+
+    prev_grads = {key: np.zeros_like(val) for key, val in weights.items()}
+    prev_steps = {key: np.ones_like(val) * 0.1 for key, val in weights.items()}
+
+    history = {"accuracy": [], "loss": [], "val_accuracy": [], "val_loss": []}
+
+    # Variabili per l'Early Stopping
+    best_loss = np.inf
+    best_weights = None
+    patience_counter = 0
 
     for epoch in range(epochs):
-        with tf.GradientTape() as tape:
-            y_pred = model(x_train, training=True)
-            loss = tf.keras.losses.categorical_crossentropy(y_train, y_pred)
+        # Forward pass
+        z1, a1, z2, a2 = forward_pass(x_train, weights)
 
-        grads = tape.gradient(loss, model.trainable_variables)
-        grads_w, grads_b = grads[0].numpy(), grads[1].numpy()
+        # Loss
+        train_loss = compute_loss(y_train, a2)
 
-        weights, prev_grads_w, prev_step_w = rprop_update(weights, grads_w, prev_grads_w, prev_step_w, eta_pos, eta_neg)
-        biases, prev_grads_b, prev_step_b = rprop_update(biases, grads_b, prev_grads_b, prev_step_b, eta_pos, eta_neg)
+        # Backward pass
+        grads = backward_pass(x_train, y_train, z1, a1, z2, a2, weights)
 
-        model.layers[0].set_weights([weights, biases])
+        # RProp Update
+        weights, prev_grads, prev_steps = rprop_update(weights, grads, prev_grads, prev_steps, eta_pos, eta_neg)
 
-        train_loss = np.mean(loss)
-        train_accuracy = model.evaluate(x_train, y_train, verbose=0)[1]
+        # Accuratezza sul training set
+        predictions_train = np.argmax(a2, axis=1)
+        targets_train = np.argmax(y_train, axis=1)
+        train_accuracy = np.mean(predictions_train == targets_train)
 
-        history['loss'].append(train_loss)
-        history['accuracy'].append(train_accuracy)
+        # Validazione
+        z1_val, a1_val, z2_val, a2_val = forward_pass(x_val, weights)
+        val_loss = compute_loss(y_val, a2_val)
+        predictions_val = np.argmax(a2_val, axis=1)
+        targets_val = np.argmax(y_val, axis=1)
+        val_accuracy = np.mean(predictions_val == targets_val)
 
-        print(f"Epoch {epoch + 1}/{epochs} - Accuracy: {train_accuracy:.4f}, Loss: {train_loss:.4f}")
+        # Memorizza le metriche
+        history["accuracy"].append(train_accuracy)
+        history["loss"].append(train_loss)
+        history["val_accuracy"].append(val_accuracy)
+        history["val_loss"].append(val_loss)
 
-    return model, history
+        print(f"Epoch {epoch + 1}/{epochs} - Train Acc: {train_accuracy:.4f}, Train Loss: {train_loss:.4f} - Val Acc: {val_accuracy:.4f}, Val Loss: {val_loss:.4f}")
 
-# Funzione di cross-validation
-def cross_validation(x_train, y_train, num_folds, num_hidden_units, eta_pos, eta_neg):
+        # Early Stopping
+        if val_loss < best_loss:
+            best_loss = val_loss
+            best_weights = weights.copy()
+            patience_counter = 0  # Reset del contatore
+        else:
+            patience_counter += 1
+
+        if patience_counter >= patience:
+            print(f"Early stopping triggered at epoch {epoch + 1}")
+            break
+
+    # Restituisce i pesi migliori
+    return best_weights, history
+
+# Funzione di cross-validation con Early Stopping
+def cross_validation_with_early_stopping(x_train, y_train, num_folds, hidden_dim, eta_pos, eta_neg, patience):
     kfold = KFold(n_splits=num_folds, shuffle=True)
     fold_results = []
     histories = []
@@ -73,65 +151,73 @@ def cross_validation(x_train, y_train, num_folds, num_hidden_units, eta_pos, eta
     for fold, (train_idx, val_idx) in enumerate(kfold.split(x_train), 1):
         print(f"\nFold {fold}/{num_folds}")
 
-        # Suddivisione del dataset in train e validation per questo fold
+        # Suddivisione del dataset
         x_train_fold, y_train_fold = x_train[train_idx], y_train[train_idx]
         x_val_fold, y_val_fold = x_train[val_idx], y_train[val_idx]
 
-        # Addestramento del modello con RProp
-        model, history = train_model_rprop(x_train_fold, y_train_fold, num_hidden_units, epochs=50, eta_pos=eta_pos, eta_neg=eta_neg)
+        # Addestramento del modello con Early Stopping
+        weights, history = train_model_rprop_with_early_stopping(
+            x_train_fold, y_train_fold, x_val_fold, y_val_fold,
+            hidden_dim=hidden_dim, epochs=50, eta_pos=eta_pos, eta_neg=eta_neg, patience=patience
+        )
 
-        # Valutazione delle performance su train e validation
-        train_loss, train_accuracy = model.evaluate(x_train_fold, y_train_fold, verbose=0)
-        val_loss, val_accuracy = model.evaluate(x_val_fold, y_val_fold, verbose=0)
+        # Validazione
+        z1, a1, z2, a2 = forward_pass(x_val_fold, weights)
+        val_loss = compute_loss(y_val_fold, a2)
+        predictions = np.argmax(a2, axis=1)
+        targets = np.argmax(y_val_fold, axis=1)
+        val_accuracy = np.mean(predictions == targets)
 
-        # Salvataggio dei risultati
         fold_results.append({
             "fold": fold,
-            "train_accuracy": train_accuracy,
-            "train_loss": train_loss,
             "val_accuracy": val_accuracy,
             "val_loss": val_loss
         })
-
         histories.append(history)
 
-        # Stampa dei risultati di questo fold
-        print(f"Fold {fold}: Train Accuracy = {train_accuracy:.4f}, Train Loss = {train_loss:.4f}")
-        print(f"           Validation Accuracy = {val_accuracy:.4f}, Validation Loss = {val_loss:.4f}")
+        print(f"Fold {fold}: Validation Accuracy = {val_accuracy:.4f}, Validation Loss = {val_loss:.4f}")
 
     return fold_results, histories
 
-# Parametri
+# Funzione per tracciare i grafici di accuratezza e perdita
+def plot_metrics(histories):
+    # Media delle metriche su tutte le fold
+    avg_accuracy = np.mean([history['accuracy'] for history in histories], axis=0)
+    avg_loss = np.mean([history['loss'] for history in histories], axis=0)
+    avg_val_accuracy = np.mean([history['val_accuracy'] for history in histories], axis=0)
+    avg_val_loss = np.mean([history['val_loss'] for history in histories], axis=0)
+
+    # Plot della Loss
+    plt.figure(figsize=(12, 6))
+    plt.subplot(1, 2, 1)
+    plt.plot(avg_loss, label='Train Loss')
+    plt.plot(avg_val_loss, label='Validation Loss')
+    plt.title("Loss vs Epochs")
+    plt.xlabel("Epochs")
+    plt.ylabel("Loss")
+    plt.legend()
+
+    # Plot dell'Accuracy
+    plt.subplot(1, 2, 2)
+    plt.plot(avg_accuracy, label='Train Accuracy')
+    plt.plot(avg_val_accuracy, label='Validation Accuracy')
+    plt.title("Accuracy vs Epochs")
+    plt.xlabel("Epochs")
+    plt.ylabel("Accuracy")
+    plt.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+# Parametri di addestramento
 num_folds = 10
-num_hidden_units = 128
+hidden_dim = 128
 eta_pos = 1.1
 eta_neg = 0.4
+patience = 5
 
-# Cross-validation
-fold_results, histories = cross_validation(x_train, y_train, num_folds, num_hidden_units, eta_pos, eta_neg)
+# Esegui la cross-validation con Early Stopping
+fold_results, histories = cross_validation_with_early_stopping(x_train, y_train, num_folds, hidden_dim, eta_pos, eta_neg, patience)
 
-# Analisi dei risultati
-accuracies = [res["val_accuracy"] for res in fold_results]
-losses = [res["val_loss"] for res in fold_results]
-
-# Grafici
-fig, ax = plt.subplots(2, 1, figsize=(12, 12))
-
-# Accuratezza per fold
-for fold, history in enumerate(histories, 1):
-    ax[0].plot(history['accuracy'], label=f'Fold {fold}')
-ax[0].set_title("Accuratezza per Fold")
-ax[0].set_xlabel("Epoch")
-ax[0].set_ylabel("Accuratezza")
-ax[0].legend()
-
-# Perdita per fold
-for fold, history in enumerate(histories, 1):
-    ax[1].plot(history['loss'], label=f'Fold {fold}')
-ax[1].set_title("Perdita per Fold")
-ax[1].set_xlabel("Epoch")
-ax[1].set_ylabel("Perdita")
-ax[1].legend()
-
-plt.tight_layout()
-plt.show()
+# Traccia i grafici delle metriche
+plot_metrics(histories)
