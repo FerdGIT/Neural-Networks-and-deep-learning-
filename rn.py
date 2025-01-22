@@ -158,7 +158,7 @@ def cross_validation_with_early_stopping(x_train, y_train, num_folds, hidden_dim
         # Addestramento del modello con Early Stopping
         weights, history = train_model_rprop_with_early_stopping(
             x_train_fold, y_train_fold, x_val_fold, y_val_fold,
-            hidden_dim=hidden_dim, epochs=50, eta_pos=eta_pos, eta_neg=eta_neg, patience=patience
+            hidden_dim=hidden_dim, epochs=200, eta_pos=eta_pos, eta_neg=eta_neg, patience=patience
         )
 
         # Validazione
@@ -182,10 +182,11 @@ def cross_validation_with_early_stopping(x_train, y_train, num_folds, hidden_dim
 # Funzione per tracciare i grafici di accuratezza e perdita
 def plot_metrics(histories):
     # Media delle metriche su tutte le fold
-    avg_accuracy = np.mean([history['accuracy'] for history in histories], axis=0)
-    avg_loss = np.mean([history['loss'] for history in histories], axis=0)
-    avg_val_accuracy = np.mean([history['val_accuracy'] for history in histories], axis=0)
-    avg_val_loss = np.mean([history['val_loss'] for history in histories], axis=0)
+    num_epochs = min(len(history['accuracy']) for history in histories)  # Minimo numero di epoche tra le fold
+    avg_accuracy = np.mean([history['accuracy'][:num_epochs] for history in histories], axis=0)
+    avg_loss = np.mean([history['loss'][:num_epochs] for history in histories], axis=0)
+    avg_val_accuracy = np.mean([history['val_accuracy'][:num_epochs] for history in histories], axis=0)
+    avg_val_loss = np.mean([history['val_loss'][:num_epochs] for history in histories], axis=0)
 
     # Plot della Loss
     plt.figure(figsize=(12, 6))
@@ -215,7 +216,7 @@ hidden_dim = 128
 eta_pos = 1.1
 eta_neg = 0.4
 patience = 5
-
+ 
 # Esegui la cross-validation con Early Stopping
 fold_results, histories = cross_validation_with_early_stopping(x_train, y_train, num_folds, hidden_dim, eta_pos, eta_neg, patience)
 
