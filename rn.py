@@ -179,7 +179,7 @@ def cross_validation_with_early_stopping(x_train, y_train, num_folds, hidden_dim
 
     return fold_results, histories
 
-# Funzione per tracciare i grafici di accuratezza e perdita
+
 def plot_metrics(histories):
     # Media delle metriche su tutte le fold
     num_epochs = min(len(history['accuracy']) for history in histories)  # Minimo numero di epoche tra le fold
@@ -188,21 +188,20 @@ def plot_metrics(histories):
     avg_val_accuracy = np.mean([history['val_accuracy'][:num_epochs] for history in histories], axis=0)
     avg_val_loss = np.mean([history['val_loss'][:num_epochs] for history in histories], axis=0)
 
-    # Plot della Loss
+    # Plot della media delle metriche
     plt.figure(figsize=(12, 6))
     plt.subplot(1, 2, 1)
     plt.plot(avg_loss, label='Train Loss')
     plt.plot(avg_val_loss, label='Validation Loss')
-    plt.title("Loss vs Epochs")
+    plt.title("Loss vs Epochs (Average across folds)")
     plt.xlabel("Epochs")
     plt.ylabel("Loss")
     plt.legend()
 
-    # Plot dell'Accuracy
     plt.subplot(1, 2, 2)
     plt.plot(avg_accuracy, label='Train Accuracy')
     plt.plot(avg_val_accuracy, label='Validation Accuracy')
-    plt.title("Accuracy vs Epochs")
+    plt.title("Accuracy vs Epochs (Average across folds)")
     plt.xlabel("Epochs")
     plt.ylabel("Accuracy")
     plt.legend()
@@ -210,9 +209,33 @@ def plot_metrics(histories):
     plt.tight_layout()
     plt.show()
 
+    # Plot delle metriche per ogni fold
+    plt.figure(figsize=(12, 12))
+    for fold_idx, history in enumerate(histories, start=1):
+        num_epochs_fold = len(history['accuracy'])
+        
+        # Accuracy per fold
+        plt.subplot(2, 1, 1)
+        plt.plot(range(1, num_epochs_fold + 1), history['val_accuracy'], label=f'Fold {fold_idx}')
+        plt.title("Validation Accuracy per Fold")
+        plt.xlabel("Epochs")
+        plt.ylabel("Accuracy")
+        plt.legend()
+
+        # Loss per fold
+        plt.subplot(2, 1, 2)
+        plt.plot(range(1, num_epochs_fold + 1), history['val_loss'], label=f'Fold {fold_idx}')
+        plt.title("Validation Loss per Fold")
+        plt.xlabel("Epochs")
+        plt.ylabel("Loss")
+        plt.legend()
+
+    plt.tight_layout()
+    plt.show()
+
 # Parametri di addestramento
 num_folds = 10
-hidden_dim = 128
+hidden_dim = 64
 eta_pos = 1.1
 eta_neg = 0.4
 patience = 5
