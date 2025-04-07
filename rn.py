@@ -53,9 +53,26 @@ def rprop_update(weights, grads, prev_grads, prev_steps, eta_pos, eta_neg):
     for key in weights:
         grad_sign = np.sign(grads[key])
         prev_grad_sign = np.sign(prev_grads[key])
-        update_step = prev_steps[key] * np.where(grad_sign == prev_grad_sign, eta_pos, eta_neg)
-        prev_steps[key] = update_step
-        weights[key] -= np.sign(grads[key]) * update_step
+        sign_change = grad_sign * prev_grad_sign
+
+        increase = sign_change > 0
+        decrease = sign_change < 0
+
+        # aggiorna la dimensione dei passi
+        prev_steps[key][increase] *= eta_pos
+        prev_steps[key][decrease] *= eta_neg
+        # (clipping opzionale per evitare passi troppo grandi/piccoli)
+        prev_steps[key] = np.clip(prev_steps[key], 1e-6, 50)
+
+        # pesi aggiornati solo dove il segno NON è cambiato
+        update_mask = sign_change >= 0
+        weights[key][update_mask] -= grad_sign[update_mask] * prev_steps[key][update_mask]
+
+        # dove c'è oscillazione: step ridotto, ma NESSUN aggiornamento del peso
+        # inoltre: reset del gradiente dove c'è stato cambiamento di segno
+        grads[key][decrease] = 0
+
+        # memorizza i gradienti aggiornati
         prev_grads[key] = grads[key]
     return weights, prev_grads, prev_steps
 
@@ -107,7 +124,7 @@ def train_model_rprop_with_early_stopping(x_train, y_train, x_val, y_val, hidden
     return best_weights, history
 
 
-def grid_search_cross_validation(x_train, y_train, param_grid, num_folds=5, patience=5, epochs=100):
+def grid_search_cross_validation(x_train, y_train, param_grid, num_folds=10, patience=5, epochs=100):
     best_params = None
     best_score = -np.inf
     results = []
@@ -164,7 +181,7 @@ param_grid = {
 best_params, grid_results = grid_search_cross_validation(
     x_train, y_train,
     param_grid=param_grid,
-    num_folds=5,
+    num_folds=10,
     patience=5,
     epochs=100
 )
