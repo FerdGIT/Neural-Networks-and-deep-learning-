@@ -76,7 +76,7 @@ def rprop_update(weights, grads, prev_grads, prev_steps, eta_pos, eta_neg):
         prev_grads[key] = grads[key]
     return weights, prev_grads, prev_steps
 
-def train_model_rprop_with_early_stopping(x_train, y_train, x_val, y_val, hidden_dim, epochs, eta_pos, eta_neg, patience=10, verbose=True):
+def train_model_rprop_with_early_stopping(x_train, y_train, x_val, y_val, hidden_dim, epochs, eta_pos, eta_neg, patience=10):
     input_dim = x_train.shape[1]
     output_dim = y_train.shape[1]
     weights = initialize_weights(input_dim, hidden_dim, output_dim)
@@ -108,8 +108,7 @@ def train_model_rprop_with_early_stopping(x_train, y_train, x_val, y_val, hidden
         history["val_accuracy"].append(val_accuracy)
         history["val_loss"].append(val_loss)
 
-        if verbose and (epoch % 5 == 0 or epoch == epochs - 1):
-            print(f"Epoch {epoch + 1}/{epochs} - Train Acc: {train_accuracy:.4f}, Loss: {train_loss:.4f} | Val Acc: {val_accuracy:.4f}, Val Loss: {val_loss:.4f}")
+        print(f"Epoch {epoch + 1}/{epochs} - Train Acc: {train_accuracy:.4f}, Loss: {train_loss:.4f} | Val Acc: {val_accuracy:.4f}, Val Loss: {val_loss:.4f}")
 
         if val_loss < best_loss:
             best_loss = val_loss
@@ -119,26 +118,16 @@ def train_model_rprop_with_early_stopping(x_train, y_train, x_val, y_val, hidden
             patience_counter += 1
 
         if patience_counter >= patience:
-            if verbose:
-                print(f"Early stopping at epoch {epoch + 1}")
+            print(f"Early stopping at epoch {epoch + 1}")
             break
 
     return best_weights, history
 
 
-def grid_search_cross_validation_with_test(x_train, y_train, param_grid, num_folds=10, patience=5, epochs=100):
+def grid_search_cross_validation(x_train, y_train, param_grid, num_folds=10, patience=5, epochs=100):
     best_params = None
     best_score = -np.inf
     results = []
-    
-    # Per tenere traccia del miglior modello e delle sue performance sul test set
-    best_test_accuracy = -np.inf
-    best_test_loss = np.inf
-    best_test_fold_metrics = None
-    
-    print("\n" + "="*80)
-    print(f"INIZIANDO GRID SEARCH CON SPLIT 8/1/1 E {num_folds}-FOLD CROSS-VALIDATION")
-    print("="*80)
     
     # Genera tutte le combinazioni di parametri
     param_combinations = [
@@ -148,224 +137,103 @@ def grid_search_cross_validation_with_test(x_train, y_train, param_grid, num_fol
         for en in param_grid['eta_neg']
     ]
     
-    print(f"Numero totale di combinazioni di parametri da testare: {len(param_combinations)}")
-    
-    for param_idx, params in enumerate(param_combinations, 1):
-        print("\n" + "-"*80)
-        print(f"COMBINAZIONE {param_idx}/{len(param_combinations)}: {params}")
-        print("-"*80)
+    for params in param_combinations:
+        print(f"\nTesting parameters: {params}")
+        kfold = KFold(n_splits=num_folds, shuffle=True)
+        fold_accuracies = []
         
-        kfold = KFold(n_splits=num_folds, shuffle=True, random_state=42)
-        fold_val_accuracies = []
-        fold_test_accuracies = []
-        fold_test_losses = []
-        fold_details = []
-        
-        for fold, (train_val_idx, test_idx) in enumerate(kfold.split(x_train), 1):
-            print(f"\nFold {fold}/{num_folds}")
-            print("-"*40)
+        for fold, (train_idx, val_idx) in enumerate(kfold.split(x_train), 1):
+            x_tr, y_tr = x_train[train_idx], y_train[train_idx]
+            x_vl, y_vl = x_train[val_idx], y_train[val_idx]
             
-            # Divisione in train_val e test (90% e 10%)
-            x_train_val, y_train_val = x_train[train_val_idx], y_train[train_val_idx]
-            x_test_fold, y_test_fold = x_train[test_idx], y_train[test_idx]
-            
-            # Divisione di train_val in train e validation (8:1 rispetto al dataset originale)
-            train_idx, val_idx = train_test_split(
-                np.arange(len(x_train_val)), 
-                test_size=1/9,  # 1/9 del 90% ≈ 10% del dataset originale
-                random_state=42+fold
-            )
-            
-            x_tr, y_tr = x_train_val[train_idx], y_train_val[train_idx]
-            x_vl, y_vl = x_train_val[val_idx], y_train_val[val_idx]
-            
-            # Stampa delle dimensioni degli split
-            print(f"Dimensione Training:   {x_tr.shape[0]} esempi ({100*x_tr.shape[0]/len(x_train):.1f}% del dataset)")
-            print(f"Dimensione Validation: {x_vl.shape[0]} esempi ({100*x_vl.shape[0]/len(x_train):.1f}% del dataset)")
-            print(f"Dimensione Test:       {x_test_fold.shape[0]} esempi ({100*x_test_fold.shape[0]/len(x_train):.1f}% del dataset)")
-            
-            # Training del modello con early stopping
             model, history = train_model_rprop_with_early_stopping(
                 x_tr, y_tr, x_vl, y_vl,
-                params['hidden_dim'], epochs, params['eta_pos'], params['eta_neg'], patience,
-                verbose=False  # Riduciamo l'output durante il training per maggiore chiarezza
+                params['hidden_dim'], epochs, params['eta_pos'], params['eta_neg'], patience
             )
             
-            # Valutazione sul validation set
             _, _, _, a2_val = forward_pass(x_vl, model)
             val_accuracy = np.mean(np.argmax(a2_val, axis=1) == np.argmax(y_vl, axis=1))
-            val_loss = compute_loss(y_vl, a2_val)
-            fold_val_accuracies.append(val_accuracy)
-            
-            # Valutazione sul test set interno
-            _, _, _, a2_test = forward_pass(x_test_fold, model)
-            test_accuracy = np.mean(np.argmax(a2_test, axis=1) == np.argmax(y_test_fold, axis=1))
-            test_loss = compute_loss(y_test_fold, a2_test)
-            fold_test_accuracies.append(test_accuracy)
-            fold_test_losses.append(test_loss)
-            
-            # Dettagli del fold
-            fold_detail = {
-                'epochs_trained': len(history['accuracy']),
-                'final_train_accuracy': history['accuracy'][-1],
-                'final_train_loss': history['loss'][-1],
-                'val_accuracy': val_accuracy,
-                'val_loss': val_loss,
-                'test_accuracy': test_accuracy,
-                'test_loss': test_loss,
-                'model': model  # Salviamo il modello addestrato
-            }
-            fold_details.append(fold_detail)
-            
-            # Verifica se questo è il miglior modello sul test set finora
-            if test_accuracy > best_test_accuracy:
-                best_test_accuracy = test_accuracy
-                best_test_loss = test_loss
-                best_test_fold_metrics = fold_detail
-                best_test_params = params.copy()
-                best_test_fold = fold
-                
-            print(f"Epoche completate: {len(history['accuracy'])}")
-            print(f"Training  - Accuracy: {history['accuracy'][-1]:.4f}, Loss: {history['loss'][-1]:.4f}")
-            print(f"Validation - Accuracy: {val_accuracy:.4f}, Loss: {val_loss:.4f}")
-            print(f"Test      - Accuracy: {test_accuracy:.4f}, Loss: {test_loss:.4f}")
+            fold_accuracies.append(val_accuracy)
+            print(f"Fold {fold} Val Accuracy: {val_accuracy:.4f}")
         
-        mean_val_accuracy = np.mean(fold_val_accuracies)
-        std_val_accuracy = np.std(fold_val_accuracies)
-        mean_test_accuracy = np.mean(fold_test_accuracies)
-        std_test_accuracy = np.std(fold_test_accuracies)
-        mean_test_loss = np.mean(fold_test_losses)
-        
-        print("\n" + "-"*60)
-        print(f"RISULTATO COMPLESSIVO PER PARAMETRI: {params}")
-        print(f"Media Validation Accuracy: {mean_val_accuracy:.4f} ± {std_val_accuracy:.4f}")
-        print(f"Media Test Accuracy: {mean_test_accuracy:.4f} ± {std_test_accuracy:.4f}")
-        print(f"Media Test Loss: {mean_test_loss:.4f}")
-        print("-"*60)
-        
-        if mean_val_accuracy > best_score:
-            best_score = mean_val_accuracy
+        mean_accuracy = np.mean(fold_accuracies)
+        if mean_accuracy > best_score:
+            best_score = mean_accuracy
             best_params = params
-            print("► NUOVI MIGLIORI PARAMETRI TROVATI ◄")
         
         results.append({
             'params': params,
-            'mean_val_accuracy': mean_val_accuracy,
-            'std_val_accuracy': std_val_accuracy,
-            'mean_test_accuracy': mean_test_accuracy,
-            'std_test_accuracy': std_test_accuracy,
-            'mean_test_loss': mean_test_loss,
-            'fold_val_accuracies': fold_val_accuracies,
-            'fold_test_accuracies': fold_test_accuracies,
-            'fold_test_losses': fold_test_losses,
-            'fold_details': fold_details
+            'mean_accuracy': mean_accuracy,
+            'fold_accuracies': fold_accuracies
         })
+        print(f"Mean validation accuracy: {mean_accuracy:.4f}")
     
-    # Riassunto finale dei risultati della grid search
-    print("\n" + "="*80)
-    print("RISULTATI FINALI DELLA GRID SEARCH")
-    print("="*80)
-    print(f"Miglior combinazione di parametri (basata sulla media validation): {best_params}")
-    print(f"Miglior accuracy di validation: {best_score:.4f}")
-    
-    # Informazioni sul miglior modello individuale (basato sul test set)
-    print("\n" + "="*80)
-    print("MIGLIOR MODELLO SINGOLO (SULLA PERFORMANCE DEL TEST SET)")
-    print("="*80)
-    print(f"Parametri: {best_test_params}")
-    print(f"Fold: {best_test_fold}")
-    print(f"Test Accuracy: {best_test_accuracy:.4f}")
-    print(f"Test Loss: {best_test_loss:.4f}")
-    print(f"Epoche di training: {best_test_fold_metrics['epochs_trained']}")
-    
-    # Creiamo una tabella dei risultati ordinata per performance
-    print("\nRiepilogo di tutte le combinazioni testate (ordinate per performance):")
-    print("-"*100)
-    print(f"{'#':<3} {'Hidden':<8} {'Eta+':<6} {'Eta-':<6} {'Val Accuracy':<20} {'Test Accuracy':<20} {'Test Loss':<10}")
-    print("-"*100)
-    
-    sorted_results = sorted(results, key=lambda x: x['mean_val_accuracy'], reverse=True)
-    for i, res in enumerate(sorted_results, 1):
-        p = res['params']
-        print(f"{i:<3} {p['hidden_dim']:<8} {p['eta_pos']:<6} {p['eta_neg']:<6} "
-              f"{res['mean_val_accuracy']:.4f} ± {res['std_val_accuracy']:.4f}    "
-              f"{res['mean_test_accuracy']:.4f} ± {res['std_test_accuracy']:.4f}    "
-              f"{res['mean_test_loss']:.4f}")
-    
-    # Restituiamo anche le metriche del miglior modello singolo
-    return best_params, results, {
-        'best_test_params': best_test_params,
-        'best_test_accuracy': best_test_accuracy,
-        'best_test_loss': best_test_loss,
-        'best_test_fold': best_test_fold,
-        'best_test_metrics': best_test_fold_metrics
-    }
+    return best_params, results
+
+# Parametri per la grid search
+param_grid = {
+    'hidden_dim': [64, 128],
+    'eta_pos': [1.1, 1.2],
+    'eta_neg': [0.4, 0.5]
+}
+
+#grid search
+best_params, grid_results = grid_search_cross_validation(
+    x_train, y_train,
+    param_grid=param_grid,
+    num_folds=10,
+    patience=5,
+    epochs=100
+)
+
+print("\n" + "="*50)
+print(f"Migliori parametri trovati: {best_params}")
+print("="*50)
+
+# Addestramento finale con i migliori parametri
+x_train_final, x_val_final, y_train_final, y_val_final = train_test_split(
+    x_train, y_train, test_size=0.1, random_state=42
+)
+
+final_model, final_history = train_model_rprop_with_early_stopping(
+    x_train_final, y_train_final,
+    x_val_final, y_val_final,
+    best_params['hidden_dim'], 200,
+    best_params['eta_pos'], best_params['eta_neg'],
+    patience=5
+)
+
+# Valutazione finale sul test set
+_, _, _, a2_test = forward_pass(x_test, final_model)
+test_accuracy = np.mean(np.argmax(a2_test, axis=1) == np.argmax(y_test, axis=1))
+test_loss = compute_loss(y_test, a2_test)
+
+print("\n" + "="*100)
+print(f"Test Accuracy: {test_accuracy:.4f}")
+print(f"Test Loss: {test_loss:.4f}")
+print("="*100)
 
 
-def plot_metrics(history, title="Metriche di Training"):
+def plot_metrics(histories):
+    num_epochs = min(len(h['accuracy']) for h in histories)
+    avg_loss = np.mean([h['loss'][:num_epochs] for h in histories], axis=0)
+    avg_val_loss = np.mean([h['val_loss'][:num_epochs] for h in histories], axis=0)
+    avg_acc = np.mean([h['accuracy'][:num_epochs] for h in histories], axis=0)
+    avg_val_acc = np.mean([h['val_accuracy'][:num_epochs] for h in histories], axis=0)
+
     plt.figure(figsize=(12, 5))
-    
     plt.subplot(1, 2, 1)
-    plt.plot(history['loss'], label='Train Loss')
-    plt.plot(history['val_loss'], label='Validation Loss')
+    plt.plot(avg_loss, label='Train')
+    plt.plot(avg_val_loss, label='Validation')
     plt.title('Loss')
-    plt.xlabel('Epoca')
-    plt.ylabel('Loss')
     plt.legend()
-    
+
     plt.subplot(1, 2, 2)
-    plt.plot(history['accuracy'], label='Train Accuracy')
-    plt.plot(history['val_accuracy'], label='Validation Accuracy')
+    plt.plot(avg_acc, label='Train')
+    plt.plot(avg_val_acc, label='Validation')
     plt.title('Accuracy')
-    plt.xlabel('Epoca')
-    plt.ylabel('Accuracy')
     plt.legend()
-    
-    plt.suptitle(title)
-    plt.tight_layout()
     plt.show()
 
-
-def run_experiment():
-    # Parametri per la grid search
-    param_grid = {
-        'hidden_dim': [64, 128],
-        'eta_pos': [1.1, 1.2],
-        'eta_neg': [0.4, 0.5]
-    }
-    
-    # Esecuzione della grid search con split 8/1/1
-    best_params, grid_results, best_model_info = grid_search_cross_validation_with_test(
-        x_train, y_train,
-        param_grid=param_grid,
-        num_folds=5,  # Ridotto a 5 per velocizzare, puoi aumentare a 10
-        patience=5,
-        epochs=100
-    )
-    
-    print("\n" + "="*80)
-    print("CONCLUSIONI FINALI")
-    print("="*80)
-    print(f"I migliori parametri trovati (media validation): {best_params}")
-    print(f"La miglior performance singola sul test set:")
-    print(f"  - Parametri: {best_model_info['best_test_params']}")
-    print(f"  - Accuracy: {best_model_info['best_test_accuracy']:.4f}")
-    print(f"  - Loss: {best_model_info['best_test_loss']:.4f}")
-    
-    # Opzionalmente, mostriamo le metriche del miglior modello
-    if best_model_info['best_test_metrics'] is not None:
-        history = {
-            'accuracy': best_model_info['best_test_metrics'].get('history_accuracy', []),
-            'loss': best_model_info['best_test_metrics'].get('history_loss', []),
-            'val_accuracy': best_model_info['best_test_metrics'].get('history_val_accuracy', []),
-            'val_loss': best_model_info['best_test_metrics'].get('history_val_loss', [])
-        }
-        if all(len(v) > 0 for v in history.values()):
-            plot_metrics(history, title=f"Metriche del Miglior Modello (Fold {best_model_info['best_test_fold']})")
-    
-    return best_params, grid_results, best_model_info
-
-
-# Esecuzione dell'esperimento completo
-if __name__ == "__main__":
-    best_params, grid_results, best_model_info = run_experiment()
+# Plot delle metriche finali
+plot_metrics([final_history])
